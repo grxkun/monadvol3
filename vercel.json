@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "name": "monad-trading-bot",
+  "builds": [
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
+    }
+  ]
+}

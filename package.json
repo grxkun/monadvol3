@@ -1,0 +1,20 @@
+{
+  "name": "monad-trading-bot",
+  "version": "1.0.0",
+  "description": "Automated buy and sell bot for trading tokens on the Monad testnet with a user-friendly web interface",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ethers": "^5.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["monad", "testnet", "trading", "bot", "dapp", "metamask"],
+  "author": "grxkun",
+  "license": "MIT"
+}
