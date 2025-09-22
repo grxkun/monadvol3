@@ -26,19 +26,28 @@ const erc20Abi = [
 // Connect to MetaMask and get user address
 async function connectWallet() {
     try {
+        // Check if MetaMask is installed
         if (!window.ethereum) {
             alert('MetaMask is not installed. Please install MetaMask and try again.');
             return;
         }
 
-        // Add Monad Testnet if not already added
-        await addMonadTestnet();
+        console.log('Connecting to MetaMask...');
 
-        // Connect to MetaMask
+        // Create provider
         provider = new ethers.BrowserProvider(window.ethereum);
+
+        // Request account access
         await provider.send("eth_requestAccounts", []);
+
+        // Get signer
         signer = await provider.getSigner();
         userAddress = await signer.getAddress();
+
+        console.log('Connected to wallet:', userAddress);
+
+        // Check current network and switch if needed
+        await ensureMonadTestnet();
 
         isConnected = true;
 
@@ -46,42 +55,143 @@ async function connectWallet() {
         document.querySelector('.wallet-text').textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
         document.querySelector('.connect-wallet').disabled = true;
 
-        console.log('Connected to MetaMask:', userAddress);
+        // Set up event listeners for account and chain changes
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+
+        console.log('Successfully connected to MetaMask on Monad Testnet');
+
     } catch (error) {
         console.error('Error connecting to MetaMask:', error);
-        alert('Failed to connect to MetaMask. Please try again.');
+        alert(`Failed to connect to MetaMask: ${error.message}`);
+        isConnected = false;
     }
 }
 
-// Add Monad Testnet to MetaMask
-async function addMonadTestnet() {
+// Ensure we're on Monad Testnet
+async function ensureMonadTestnet() {
     try {
-        await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-                chainId: '0x279F', // 10143 in hex
-                chainName: 'Monad Testnet',
-                nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
-                rpcUrls: ['https://testnet-rpc.monad.xyz'],
-                blockExplorerUrls: ['https://testnet.monadexplorer.com'],
-            }],
-        });
+        const network = await provider.getNetwork();
+        const monadTestnetChainId = 10143; // 0x279F in decimal
+
+        console.log('Current network:', network.chainId);
+
+        if (network.chainId !== BigInt(monadTestnetChainId)) {
+            console.log('Switching to Monad Testnet...');
+
+            try {
+                // Try to switch to Monad Testnet
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: '0x279F' }],
+                });
+                console.log('Switched to Monad Testnet');
+            } catch (switchError) {
+                // If network doesn't exist, add it
+                if (switchError.code === 4902) {
+                    console.log('Adding Monad Testnet...');
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: '0x279F',
+                            chainName: 'Monad Testnet',
+                            nativeCurrency: {
+                                name: 'Monad',
+                                symbol: 'MON',
+                                decimals: 18
+                            },
+                            rpcUrls: ['https://testnet-rpc.monad.xyz'],
+                            blockExplorerUrls: ['https://testnet.monadexplorer.com'],
+                        }],
+                    });
+                    console.log('Added and switched to Monad Testnet');
+                } else {
+                    throw switchError;
+                }
+            }
+
+            // Wait a bit for the network switch to complete
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            // Verify we're on the correct network
+            const newNetwork = await provider.getNetwork();
+            if (newNetwork.chainId !== BigInt(monadTestnetChainId)) {
+                throw new Error('Failed to switch to Monad Testnet');
+            }
+        } else {
+            console.log('Already on Monad Testnet');
+        }
     } catch (error) {
-        console.log('Monad Testnet already added or error:', error);
+        console.error('Error ensuring Monad Testnet:', error);
+        throw new Error(`Network error: ${error.message}`);
     }
 }
 
-// Initialize contracts
-function initContracts() {
-    const routerAddress = document.getElementById('routerAddress').value;
-    const tokenAddress = document.getElementById('tokenAddress').value;
-    routerContract = new ethers.Contract(routerAddress, routerAbi, signer);
-    tokenContract = new ethers.Contract(tokenAddress, erc20Abi, signer);
+// Check if wallet is still connected
+async function checkConnection() {
+    try {
+        if (!window.ethereum || !provider) {
+            return false;
+        }
+
+        // Check if accounts are still available
+        const accounts = await provider.listAccounts();
+        return accounts.length > 0;
+    } catch (error) {
+        console.error('Error checking connection:', error);
+        return false;
+    }
+}
+
+// Handle account changes
+async function handleAccountsChanged(accounts) {
+    if (accounts.length === 0) {
+        // User disconnected
+        disconnectWallet();
+    } else {
+        // Account changed
+        userAddress = accounts[0];
+        document.querySelector('.wallet-text').textContent = `Connected: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+        console.log('Account changed to:', userAddress);
+    }
+}
+
+// Handle chain changes
+function handleChainChanged(chainId) {
+    console.log('Network changed to:', chainId);
+    // Reload the page to ensure all contracts are reinitialized
+    window.location.reload();
+}
+
+// Disconnect wallet
+function disconnectWallet() {
+    isConnected = false;
+    provider = null;
+    signer = null;
+    userAddress = null;
+    routerContract = null;
+    tokenContract = null;
+
+    document.querySelector('.wallet-text').textContent = 'Connect Wallet';
+    document.querySelector('.connect-wallet').disabled = false;
+    document.getElementById('startBot').disabled = false;
+    document.getElementById('stopBot').disabled = true;
+    document.getElementById('botStatus').textContent = 'Bot Status: Stopped';
+
+    stopBot(); // Stop any running bot
+    console.log('Wallet disconnected');
 }
 
 // Perform swap (buy or sell)
 async function performSwap() {
     try {
+        if (!isConnected) {
+            throw new Error('Wallet not connected');
+        }
+
+        // Ensure contracts are initialized
+        initContracts();
+
         const tokenAddress = document.getElementById('tokenAddress').value;
         const amount = document.getElementById('amount').value;
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 minutes
@@ -91,7 +201,7 @@ async function performSwap() {
 
         // Check token balance to decide action
         const tokenBalance = await tokenContract.balanceOf(userAddress);
-        
+
         if (lastAction === 'sell' || tokenBalance.eq(0)) {
             // Buy: MON to token
             type = 'Buy';
@@ -105,7 +215,7 @@ async function performSwap() {
             lastAction = 'sell';
             // Approve router to spend all tokens
             await tokenContract.approve(routerContract.address, tokenBalance);
-            
+
             const path = [tokenAddress, ethers.ZeroAddress]; // token to MON
             tx = await routerContract.swapExactTokensForETH(tokenBalance, 0, path, userAddress, deadline);
         }
@@ -128,16 +238,24 @@ async function performSwap() {
 }
 
 // Start trading bot
-function startBot() {
+async function startBot() {
     if (!isConnected) {
         alert('Please connect your wallet first.');
+        return;
+    }
+
+    // Double-check connection
+    const stillConnected = await checkConnection();
+    if (!stillConnected) {
+        alert('Wallet connection lost. Please reconnect.');
+        disconnectWallet();
         return;
     }
 
     const intervalSeconds = parseInt(document.getElementById('interval').value);
     const durationMinutes = parseInt(document.getElementById('duration').value);
 
-        initContracts();
+    initContracts();
 
     const intervalMs = intervalSeconds * 1000;
     const durationMs = durationMinutes * 60 * 1000;
@@ -146,7 +264,18 @@ function startBot() {
     document.getElementById('stopBot').disabled = false;
     document.getElementById('botStatus').textContent = 'Bot Status: Running';
 
-    botInterval = setInterval(performSwap, intervalMs);
+    botInterval = setInterval(async () => {
+        // Check connection before each swap
+        const connected = await checkConnection();
+        if (!connected) {
+            console.error('Connection lost during bot operation');
+            stopBot();
+            alert('Wallet connection lost. Bot stopped.');
+            return;
+        }
+        await performSwap();
+    }, intervalMs);
+
     botTimeout = setTimeout(() => {
         stopBot();
     }, durationMs);
